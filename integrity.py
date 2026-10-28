@@ -1,9 +1,13 @@
 """File integrity checker: hash files, save a baseline, report changes."""
 import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Read files in 64 KB chunks so a huge file never has to fit in memory.
 CHUNK_SIZE = 65536
+# Recorded in the baseline so future versions can tell which hash was used.
+ALGORITHM = "sha256"
 
 
 def hash_file(path):
@@ -26,14 +30,17 @@ def scan_folder(folder):
         raise NotADirectoryError(f"is not a folder: {folder}")
 
     hashes = {}
-    # rglob("*") walk the folder and its subfolders; sorted() makes the order the same on each run
+    # rglob("*") walks the folder and its subfolders; sorted() makes the order the same on each run
     for path in sorted(folder.rglob("*")):
+        # Skip symlinks (they could point outside the folder) and folders.
         if path.is_symlink() or not path.is_file():
             continue
 
+        # as_posix() uses "/" on every OS, so baselines match across Windows and Linux.
         key = path.relative_to(folder).as_posix()
         hashes[key] = hash_file(path)
     return hashes
+
 
 def save_baseline(hashes, baseline_path):
     """Write the hashes to a JSON baseline file."""
@@ -64,8 +71,7 @@ def load_baseline(baseline_path):
     return files
 
 
-
-# Temporary demo;
+# Temporary demo; the CLI replaces it in Step 6.
 if __name__ == "__main__":
     # Build paths from this script's location, so it works from any folder.
     here = Path(__file__).resolve().parent

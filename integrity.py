@@ -19,8 +19,25 @@ def hash_file(path):
     return sha256.hexdigest()
 
 
-# Temporary demo; the CLI replaces it in Step 6.
+def scan_folder(folder):
+    """Return a dict mapping file paths to their SHA-256 hex digest."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        raise NotADirectoryError(f"is not a folder: {folder}")
+
+    hashes = {}
+    # rglob("*") walk the folder and its subfolders; sorted() makes the order the same on each run
+    for path in sorted(folder.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+
+        key = path.relative_to(folder).as_posix()
+        hashes[key] = hash_file(path)
+    return hashes
+
+# Temporary demo;
 if __name__ == "__main__":
     # Build the path from this script's location, so it works from any folder.
-    sample = Path(__file__).resolve().parent / "sample_data" / "notes.txt"
-    print(hash_file(sample))
+    sample = Path(__file__).resolve().parent / "sample_data"
+    for name, digest in scan_folder(sample).items():
+        print(f"{digest}  {name}")

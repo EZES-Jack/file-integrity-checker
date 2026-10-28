@@ -1,6 +1,8 @@
 """File integrity checker: hash files, save a baseline, report changes."""
+import argparse
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,14 +73,101 @@ def load_baseline(baseline_path):
     return files
 
 
-# Temporary demo; the CLI replaces it in Step 6.
+def compare_hashes(baseline, current):
+    """Return (added, modified, deleted) as sorted lists of relative paths."""
+    # Dict keys behave like sets, so set maths finds the differences directly.
+    added = sorted(current.keys() - baseline.keys())      # only in the new scan
+    deleted = sorted(baseline.keys() - current.keys())    # only in the baseline
+    # In both, but the hash differs: the contents changed.
+    modified = sorted(
+        name for name in baseline.keys() & current.keys()
+        if baseline[name] != current[name]
+    )
+    return added, modified, deleted
+
+
+def build_report(folder, added, modified, deleted):
+    """Return the change report as a single string."""
+    lines = [
+        "File integrity check",
+        f"Folder: {folder}",
+        f"Added: {len(added)}  Modified: {len(modified)}  Deleted: {len(deleted)}",
+    ]
+    if not (added or modified or deleted):
+        lines.append("No changes detected.")
+        return "\n".join(lines)
+
+    lines.append("")
+    # Each prefix makes the change type visible at a glance.
+    lines += [f"  + added:    {name}" for name in added]
+    lines += [f"  ~ modified: {name}" for name in modified]
+    lines += [f"  - deleted:  {name}" for name in deleted]
+    return "\n".join(lines)
+
+
+def is_inside(path, folder):
+    """Return True if path is located inside folder."""
+    try:
+        # resolve() makes both paths absolute, so ".." tricks can't fool us.
+        path.resolve().relative_to(folder.resolve())
+        return True
+    except ValueError:  # relative_to raises ValueError when not inside
+        return False
+
+
+def main():
+    # Options shared by both subcommands.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("folder", help="folder to scan")
+    common.add_argument(
+        "-b", "--baseline", default="baseline.json",
+        help="baseline file to write or read (default: baseline.json)",
+    )
+
+    parser = argparse.ArgumentParser(
+        description="Detect added, modified and deleted files using SHA-256 baselines."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    create = sub.add_parser("baseline", parents=[common], help="record a new baseline")
+    create.add_argument(
+        "--force", action="store_true", help="overwrite an existing baseline file"
+    )
+    sub.add_parser("check", parents=[common], help="compare the folder to the baseline")
+
+    args = parser.parse_args()
+    folder = Path(args.folder)
+    baseline_path = Path(args.baseline)
+
+    try:
+        # A baseline inside the scanned folder would change the folder it
+        # describes, so every check would report a change.
+        if is_inside(baseline_path, folder):
+            print("Error: keep the baseline file outside the scanned folder.", file=sys.stderr)
+            return 2
+
+        current = scan_folder(folder)
+
+        if args.command == "baseline":
+            # Silently replacing a baseline could hide tampering, so make it explicit.
+            if baseline_path.exists() and not args.force:
+                print(f"Error: {baseline_path} already exists (use --force to overwrite).", file=sys.stderr)
+                return 2
+            save_baseline(current, baseline_path)
+            print(f"Baseline saved: {len(current)} files -> {baseline_path}")
+            return 0
+
+        baseline = load_baseline(baseline_path)
+    except (OSError, ValueError) as err:
+        # OSError: missing or unreadable files. ValueError: corrupt baseline.
+        print(f"Error: {err}", file=sys.stderr)
+        return 2
+
+    added, modified, deleted = compare_hashes(baseline, current)
+    print(build_report(folder, added, modified, deleted))
+    # Exit code 1 means "changes found", so scripts and schedulers can react.
+    return 1 if (added or modified or deleted) else 0
+
+
 if __name__ == "__main__":
-    # Build paths from this script's location, so it works from any folder.
-    here = Path(__file__).resolve().parent
-    hashes = scan_folder(here / "sample_data")
-
-    save_baseline(hashes, here / "baseline.json")
-    loaded = load_baseline(here / "baseline.json")
-
-    # A save/load round trip must give back exactly what we saved.
-    print("Round trip OK:", loaded == hashes)
+    sys.exit(main())
